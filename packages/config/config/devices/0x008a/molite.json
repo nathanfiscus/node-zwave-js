@@ -8,7 +8,8 @@
 	"devices": [
 		{
 			"productType": "0x0003",
-			"productId": "0x0100"
+			"productId": "0x0100",
+			"zwaveAllianceId": 76
 		},
 		{
 			"productType": "0x0003",
@@ -88,7 +89,7 @@
 					"value": 1
 				},
 				{
-					"label": "Mode 2: normal operation mode:",
+					"label": "Mode 2: normal operation mode",
 					"value": 2
 				},
 				{

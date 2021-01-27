@@ -171,7 +171,7 @@
 			"label": "Button 1 Type",
 			"description": "button 1 Type",
 			"valueSize": 1,
-			"minValue": 1,
+			"minValue": 0,
 			"maxValue": 6,
 			"defaultValue": 1,
 			"readOnly": false,
@@ -191,7 +191,7 @@
 					"value": 2
 				},
 				{
-					"label": "Blind  down",
+					"label": "Blind down",
 					"value": 3
 				},
 				{
@@ -1339,7 +1339,7 @@
 					"value": 2
 				},
 				{
-					"label": "Blind  down",
+					"label": "Blind down",
 					"value": 3
 				},
 				{
@@ -1670,10 +1670,6 @@
 				{
 					"label": "Output number 6",
 					"value": 6
-				},
-				{
-					"label": "BLANK",
-					"value": 255
 				}
 			]
 		},

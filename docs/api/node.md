@@ -68,6 +68,37 @@ This method automatically figures out which commands to send to the node, so you
 
 <!-- TODO: Check what happens if the CC is not supported by the node -->
 
+### `pollValue`
+
+```ts
+async pollValue<T>(valueId: ValueID): Promise<T | undefined>
+```
+
+Polls a value from the node. The `valueId` parameter specifies which value to poll. You can define the expected return type by passing it as the type parameter `T`.
+
+This method automatically figures out which commands to send to the node, so you don't have to use the specific commands yourself. The returned promise resolves to the current value reported by the node or `undefined` if there was no response. It will be **rejected** if any of the following conditions are met:
+
+-   The `pollValue` API is not implemented in the required Command Class
+-   The required Command Class is not implemented in this library yet
+-   The API for the required Command Class is not implemented in this library yet
+
+> [!WARNING]
+> Polling can impose a heavy load on the network and should not be done too frequently.
+
+> [!WARNING]
+> Some value IDs share a command, so make sure not to blindly call this for every property. Otherwise you'll end up with multiple duplicate requests.
+
+### `refreshValues`
+
+```ts
+refreshValues(): Promise<void>
+```
+
+Refreshes all non-static sensor and actuator values from this node. Although this method returns a `Promise`, it should generally **not** be `await`ed, since the update may take a long time.
+
+> [!WARNING]  
+> **DO NOT** use this method too frequently. Depending on the devices, this may generate a lot of traffic.
+
 ### `getEndpoint`
 
 ```ts

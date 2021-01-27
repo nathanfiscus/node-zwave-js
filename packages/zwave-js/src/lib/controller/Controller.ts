@@ -1,7 +1,9 @@
 import {
 	actuatorCCs,
 	CommandClasses,
+	indexDBsByNode,
 	NODE_ID_BROADCAST,
+	ValueDB,
 	ZWaveError,
 	ZWaveErrorCodes,
 } from "@zwave-js/core";
@@ -107,6 +109,11 @@ import { ZWaveLibraryTypes } from "./ZWaveLibraryTypes";
 
 export type HealNodeStatus = "pending" | "done" | "failed" | "skipped";
 
+export type ThrowingMap<K, V> = Map<K, V> & { getOrThrow(key: K): V };
+export type ReadonlyThrowingMap<K, V> = ReadonlyMap<K, V> & {
+	getOrThrow(key: K): V;
+};
+
 // Strongly type the event emitter events
 interface ControllerEventCallbacks {
 	"inclusion failed": () => void;
@@ -123,7 +130,7 @@ interface ControllerEventCallbacks {
 	"heal network done": (result: ReadonlyMap<number, HealNodeStatus>) => void;
 }
 
-type ControllerEvents = Extract<keyof ControllerEventCallbacks, string>;
+export type ControllerEvents = Extract<keyof ControllerEventCallbacks, string>;
 
 export interface ZWaveController {
 	on<TEvent extends ControllerEvents>(
@@ -154,6 +161,24 @@ export class ZWaveController extends EventEmitter {
 	/** @internal */
 	public constructor(private readonly driver: Driver) {
 		super();
+
+		this._nodes = new Map<number, ZWaveNode>() as ThrowingMap<
+			number,
+			ZWaveNode
+		>;
+		this._nodes.getOrThrow = function (
+			this: Map<number, ZWaveNode>,
+			nodeId: number,
+		) {
+			const node = this.get(nodeId);
+			if (!node) {
+				throw new ZWaveError(
+					`Node ${nodeId} was not found!`,
+					ZWaveErrorCodes.Controller_NodeNotFound,
+				);
+			}
+			return node;
+		}.bind(this._nodes);
 
 		// register message handlers
 		driver.registerRequestHandler(
@@ -268,9 +293,9 @@ export class ZWaveController extends EventEmitter {
 		return this._supportsTimers;
 	}
 
-	private _nodes = new Map<number, ZWaveNode>();
+	private _nodes: ThrowingMap<number, ZWaveNode>;
 	/** A dictionary of the nodes connected to this controller */
-	public get nodes(): ReadonlyMap<number, ZWaveNode> {
+	public get nodes(): ReadonlyThrowingMap<number, ZWaveNode> {
 		return this._nodes;
 	}
 
@@ -431,9 +456,28 @@ export class ZWaveController extends EventEmitter {
   controller supports timers: ${this._supportsTimers}
   nodes in the network:       ${initData.nodeIds.join(", ")}`,
 		);
+		// Index the value DB for optimal performance
+		const valueDBIndexes = indexDBsByNode([
+			this.driver.valueDB!,
+			this.driver.metadataDB!,
+		]);
 		// create an empty entry in the nodes map so we can initialize them afterwards
 		for (const nodeId of initData.nodeIds) {
-			this._nodes.set(nodeId, new ZWaveNode(nodeId, this.driver));
+			this._nodes.set(
+				nodeId,
+				new ZWaveNode(
+					nodeId,
+					this.driver,
+					undefined,
+					undefined,
+					undefined,
+					// Use the previously created index to avoid doing extra work when creating the value DB
+					this.createValueDBForNode(
+						nodeId,
+						valueDBIndexes.get(nodeId),
+					),
+				),
+			);
 		}
 
 		// Now try to deserialize all nodes from the cache
@@ -529,6 +573,15 @@ export class ZWaveController extends EventEmitter {
 		// }
 
 		this.driver.controllerLog.print("Interview completed");
+	}
+
+	private createValueDBForNode(nodeId: number, ownKeys?: Set<string>) {
+		return new ValueDB(
+			nodeId,
+			this.driver.valueDB!,
+			this.driver.metadataDB!,
+			ownKeys,
+		);
 	}
 
 	/**
@@ -878,6 +931,12 @@ export class ZWaveController extends EventEmitter {
 					),
 					msg.statusContext!.supportedCCs,
 					msg.statusContext!.controlledCCs,
+					// Create an empty value DB and specify that it contains no values
+					// to avoid indexing the existing values
+					this.createValueDBForNode(
+						msg.statusContext!.nodeId,
+						new Set(),
+					),
 				);
 				// TODO: According to INS13954-7, there are several more steps and different timeouts when including a controller
 				// For now do the absolute minimum - that is include the controller
@@ -900,7 +959,7 @@ export class ZWaveController extends EventEmitter {
 				);
 				// stopping the inclusion was acknowledged by the controller
 				if (this._stopInclusionPromise != null)
-					this._stopInclusionPromise.resolve();
+					this._stopInclusionPromise.resolve(true);
 
 				if (this._nodePendingInclusion != null) {
 					const newNode = this._nodePendingInclusion;
@@ -1001,6 +1060,15 @@ export class ZWaveController extends EventEmitter {
 					const newNode = new ZWaveNode(
 						this._nodePendingReplace.id,
 						this.driver,
+						undefined,
+						undefined,
+						undefined,
+						// Create an empty value DB and specify that it contains no values
+						// to avoid indexing the existing values
+						this.createValueDBForNode(
+							this._nodePendingReplace.id,
+							new Set(),
+						),
 					);
 					this._nodePendingReplace = undefined;
 					this._nodes.set(newNode.id, newNode);
@@ -1103,7 +1171,7 @@ export class ZWaveController extends EventEmitter {
 
 				// stopping the inclusion was acknowledged by the controller
 				if (this._stopInclusionPromise != null)
-					this._stopInclusionPromise.resolve();
+					this._stopInclusionPromise.resolve(true);
 
 				if (this._nodePendingExclusion != null) {
 					this.driver.controllerLog.print(
@@ -1408,13 +1476,7 @@ ${associatedNodes.join(", ")}`,
 	public getAssociationGroups(
 		nodeId: number,
 	): ReadonlyMap<number, AssociationGroup> {
-		const node = this.nodes.get(nodeId);
-		if (!node) {
-			throw new ZWaveError(
-				`Node ${nodeId} was not found!`,
-				ZWaveErrorCodes.Controller_NodeNotFound,
-			);
-		}
+		const node = this.nodes.getOrThrow(nodeId);
 
 		// Check whether we have multi channel support or not
 		let assocInstance: AssociationCC;
@@ -1490,13 +1552,7 @@ ${associatedNodes.join(", ")}`,
 	public getAssociations(
 		nodeId: number,
 	): ReadonlyMap<number, readonly Association[]> {
-		const node = this.nodes.get(nodeId);
-		if (!node) {
-			throw new ZWaveError(
-				`Node ${nodeId} was not found!`,
-				ZWaveErrorCodes.Controller_NodeNotFound,
-			);
-		}
+		const node = this.nodes.getOrThrow(nodeId);
 
 		const ret = new Map<number, readonly Association[]>();
 
@@ -1551,21 +1607,8 @@ ${associatedNodes.join(", ")}`,
 		group: number,
 		association: Association,
 	): boolean {
-		const node = this.nodes.get(nodeId);
-		if (!node) {
-			throw new ZWaveError(
-				`Node ${nodeId} was not found!`,
-				ZWaveErrorCodes.Controller_NodeNotFound,
-			);
-		}
-
-		const targetNode = this.nodes.get(association.nodeId);
-		if (!targetNode) {
-			throw new ZWaveError(
-				`Node ${association.nodeId} was not found!`,
-				ZWaveErrorCodes.Controller_NodeNotFound,
-			);
-		}
+		const node = this.nodes.getOrThrow(nodeId);
+		const targetNode = this.nodes.getOrThrow(association.nodeId);
 
 		const targetEndpoint = targetNode.getEndpoint(
 			association.endpoint ?? 0,
@@ -1632,22 +1675,26 @@ ${associatedNodes.join(", ")}`,
 		group: number,
 		associations: Association[],
 	): Promise<void> {
-		const node = this.nodes.get(nodeId);
-		if (!node) {
-			throw new ZWaveError(
-				`Node ${nodeId} was not found!`,
-				ZWaveErrorCodes.Controller_NodeNotFound,
-			);
-		}
+		const node = this.nodes.getOrThrow(nodeId);
 
-		// Check whether we have multi channel support or not
-		let assocInstance: AssociationCC;
+		// Check whether we should add any associations the device does not have support for
+		let assocInstance: AssociationCC | undefined;
 		let mcInstance: MultiChannelAssociationCC | undefined;
+		// Split associations into conventional and endpoint associations
+		const nodeAssociations = distinct(
+			associations
+				.filter((a) => a.endpoint == undefined)
+				.map((a) => a.nodeId),
+		);
+		const endpointAssociations = associations.filter(
+			(a) => a.endpoint != undefined,
+		) as EndpointAddress[];
+
 		if (node.supportsCC(CommandClasses.Association)) {
 			assocInstance = node.createCCInstanceUnsafe<AssociationCC>(
 				CommandClasses.Association,
 			)!;
-		} else {
+		} else if (nodeAssociations.length > 0) {
 			throw new ZWaveError(
 				`Node ${nodeId} does not support associations!`,
 				ZWaveErrorCodes.CC_NotSupported,
@@ -1657,9 +1704,14 @@ ${associatedNodes.join(", ")}`,
 			mcInstance = node.createCCInstanceUnsafe<MultiChannelAssociationCC>(
 				CommandClasses["Multi Channel Association"],
 			)!;
+		} else if (endpointAssociations.length > 0) {
+			throw new ZWaveError(
+				`Node ${nodeId} does not support multi channel associations!`,
+				ZWaveErrorCodes.CC_NotSupported,
+			);
 		}
 
-		const assocGroupCount = assocInstance.getGroupCountCached() ?? 0;
+		const assocGroupCount = assocInstance?.getGroupCountCached() ?? 0;
 		const mcGroupCount = mcInstance?.getGroupCountCached() ?? 0;
 		const groupCount = Math.max(assocGroupCount, mcGroupCount);
 		if (group > groupCount) {
@@ -1695,13 +1747,6 @@ ${associatedNodes.join(", ")}`,
 				);
 			}
 
-			// Split associations into conventional and endpoint associations
-			const nodeAssociations = associations
-				.filter((a) => a.endpoint == undefined)
-				.map((a) => a.nodeId);
-			const endpointAssociations = associations.filter(
-				(a) => a.endpoint != undefined,
-			) as EndpointAddress[];
 			// And add them
 			await node.commandClasses[
 				"Multi Channel Association"
@@ -1715,7 +1760,7 @@ ${associatedNodes.join(", ")}`,
 				group,
 			);
 		} else {
-			// The group only supports "normal" associations
+			// Although the node supports multi channel associations, this group only supports "normal" associations
 			if (associations.some((a) => a.endpoint != undefined)) {
 				throw new ZWaveError(
 					`Node ${nodeId}, group ${group} does not support multi channel associations!`,
@@ -1753,13 +1798,7 @@ ${associatedNodes.join(", ")}`,
 		group: number,
 		associations: Association[],
 	): Promise<void> {
-		const node = this.nodes.get(nodeId);
-		if (!node) {
-			throw new ZWaveError(
-				`Node ${nodeId} was not found!`,
-				ZWaveErrorCodes.Controller_NodeNotFound,
-			);
-		}
+		const node = this.nodes.getOrThrow(nodeId);
 
 		let groupExistsAsMultiChannel = false;
 		// Split associations into conventional and endpoint associations
@@ -1801,17 +1840,14 @@ ${associatedNodes.join(", ")}`,
 			await node.commandClasses["Multi Channel Association"].getGroup(
 				group,
 			);
-		} else if (associations.some((a) => a.endpoint != undefined)) {
+		} else if (endpointAssociations.length > 0) {
 			throw new ZWaveError(
 				`Node ${nodeId} does not support multi channel associations!`,
 				ZWaveErrorCodes.CC_NotSupported,
 			);
 		}
 
-		if (
-			nodeAssociations.length > 0 &&
-			node.supportsCC(CommandClasses.Association)
-		) {
+		if (node.supportsCC(CommandClasses.Association)) {
 			// Use normal associations as a fallback
 			const cc = node.createCCInstanceUnsafe<AssociationCC>(
 				CommandClasses.Association,
@@ -1831,7 +1867,7 @@ ${associatedNodes.join(", ")}`,
 			});
 			// Refresh the association list
 			await node.commandClasses.Association.getGroup(group);
-		} else {
+		} else if (nodeAssociations.length > 0) {
 			throw new ZWaveError(
 				`Node ${nodeId} does not support associations!`,
 				ZWaveErrorCodes.CC_NotSupported,
@@ -1885,6 +1921,14 @@ ${associatedNodes.join(", ")}`,
 	 * @param nodeId The id of the node to remove
 	 */
 	public async removeFailedNode(nodeId: number): Promise<void> {
+		const node = this.nodes.getOrThrow(nodeId);
+		if (await node.ping()) {
+			throw new ZWaveError(
+				`The node removal process could not be started because the node responded to a ping.`,
+				ZWaveErrorCodes.ReplaceFailedNode_Failed,
+			);
+		}
+
 		const result = await this.driver.sendMessage<
 			RemoveFailedNodeRequestStatusReport | RemoveFailedNodeResponse
 		>(new RemoveFailedNodeRequest(this.driver, { failedNodeId: nodeId }));
@@ -1969,6 +2013,14 @@ ${associatedNodes.join(", ")}`,
 		this.driver.controllerLog.print(
 			`starting replace failed node process...`,
 		);
+
+		const node = this.nodes.getOrThrow(nodeId);
+		if (await node.ping()) {
+			throw new ZWaveError(
+				`The node replace process could not be started because the node responded to a ping.`,
+				ZWaveErrorCodes.ReplaceFailedNode_Failed,
+			);
+		}
 
 		this._includeNonSecure = includeNonSecure;
 

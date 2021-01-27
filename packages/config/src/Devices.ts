@@ -1,5 +1,3 @@
-import type { CommandClasses, CommandClassInfo, ValueID } from "@zwave-js/core";
-import { ZWaveError } from "@zwave-js/core";
 import {
 	JSONObject,
 	ObjectKeyMap,
@@ -8,14 +6,16 @@ import {
 } from "@zwave-js/shared";
 import { entries } from "alcalzone-shared/objects";
 import { isArray, isObject } from "alcalzone-shared/typeguards";
+import * as fs from "fs-extra";
 import { pathExists, readFile, writeFile } from "fs-extra";
 import JSON5 from "json5";
 import path from "path";
+import { CompatConfig } from "./CompatConfig";
+import type { ConfigLogger } from "./Logger";
 import {
 	configDir,
 	enumFilesRecursive,
 	formatId,
-	hexKeyRegex2Digits,
 	hexKeyRegex4Digits,
 	throwInvalidConfig,
 } from "./utils";
@@ -42,66 +42,118 @@ export const devicesDir = path.join(configDir, "devices");
 export const indexPath = path.join(devicesDir, "index.json");
 export type DeviceConfigIndex = DeviceConfigIndexEntry[];
 
-/** @internal */
-export async function loadDeviceIndexInternal(): Promise<DeviceConfigIndex> {
-	if (!(await pathExists(indexPath))) {
-		return generateDeviceIndex();
-	}
-	try {
-		const fileContents = await readFile(indexPath, "utf8");
-		return JSON5.parse(fileContents);
-	} catch (e: unknown) {
-		if (e instanceof ZWaveError) {
-			throw e;
-		} else {
-			throwInvalidConfig("devices");
+async function hasChangedDeviceFiles(
+	dir: string,
+	lastChange: Date,
+): Promise<boolean> {
+	// Check if there are any files BUT index.json that were changed
+	// or directories that were modified
+	const filesAndDirs = await fs.readdir(dir);
+	for (const f of filesAndDirs) {
+		const fullPath = path.join(dir, f);
+
+		const stat = await fs.stat(fullPath);
+		if (
+			(dir !== devicesDir || f !== "index.json") &&
+			(stat.isFile() || stat.isDirectory()) &&
+			stat.mtime > lastChange
+		) {
+			return true;
+		} else if (stat.isDirectory()) {
+			// we need to go deeper!
+			if (await hasChangedDeviceFiles(fullPath, lastChange)) return true;
 		}
 	}
+	return false;
 }
 
-/** Generates an index for all device config files */
-async function generateDeviceIndex(): Promise<DeviceConfigIndex> {
-	const configFiles = await enumFilesRecursive(
-		devicesDir,
-		(file) => file.endsWith(".json") && !file.endsWith("index.json"),
-	);
+/**
+ * @internal
+ * Loads the index file to quickly access the device configs.
+ * Transparently handles updating the index if necessary
+ */
+export async function loadDeviceIndexInternal(
+	logger?: ConfigLogger,
+	forceWrite?: boolean,
+): Promise<DeviceConfigIndex> {
+	// The index file needs to be regenerated if it does not exist
+	let needsUpdate = !(await pathExists(indexPath));
+	let index: DeviceConfigIndex | undefined;
+	let mtimeIndex: Date | undefined;
+	// ...or if cannot be parsed
+	if (!needsUpdate) {
+		try {
+			const fileContents = await readFile(indexPath, "utf8");
+			index = JSON5.parse(fileContents);
+			mtimeIndex = (await fs.stat(indexPath)).mtime;
+		} catch {
+			logger?.print(
+				"Error while parsing index file - regenerating...",
+				"warn",
+			);
+			needsUpdate = true;
+		} finally {
+			if (!index) {
+				logger?.print(
+					"Index file was malformed - regenerating...",
+					"warn",
+				);
+				needsUpdate = true;
+			}
+		}
+	}
 
-	const index: DeviceConfigIndex = [];
-
-	for (const file of configFiles) {
-		const relativePath = path
-			.relative(devicesDir, file)
-			.replace(/\\/g, "/");
-		const fileContents = await readFile(file, "utf8");
-		// Try parsing the file
-		const config = new DeviceConfig(relativePath, fileContents);
-		// Add the file to the index
-		index.push(
-			...config.devices.map((dev: any) => ({
-				manufacturerId: formatId(config.manufacturerId.toString(16)),
-				...dev,
-				firmwareVersion: config.firmwareVersion,
-				filename: relativePath,
-			})),
+	// ...or if there were any changes in the file system
+	if (!needsUpdate) {
+		needsUpdate = await hasChangedDeviceFiles(devicesDir, mtimeIndex!);
+		logger?.print(
+			"Device configuration files on disk changed - regenerating index...",
+			"verbose",
 		);
 	}
 
-	if (process.env.NODE_ENV !== "test") {
-		// Write the index (but not during tests)
-		await writeFile(
-			path.join(devicesDir, "index.json"),
-			`// This file is auto-generated. DO NOT edit it by hand if you don't know what you're doing!"
-	${stringify(index, "\t")}
-	`,
-			"utf8",
+	if (needsUpdate) {
+		index = [];
+
+		const configFiles = await enumFilesRecursive(
+			devicesDir,
+			(file) => file.endsWith(".json") && !file.endsWith("index.json"),
 		);
+
+		for (const file of configFiles) {
+			const relativePath = path
+				.relative(devicesDir, file)
+				.replace(/\\/g, "/");
+			const fileContents = await readFile(file, "utf8");
+			// Try parsing the file
+			const config = new DeviceConfig(relativePath, fileContents);
+			// Add the file to the index
+			index.push(
+				...config.devices.map((dev: any) => ({
+					manufacturerId: formatId(
+						config.manufacturerId.toString(16),
+					),
+					...dev,
+					firmwareVersion: config.firmwareVersion,
+					filename: relativePath,
+				})),
+			);
+		}
+
+		if (forceWrite || process.env.NODE_ENV !== "test") {
+			// Save the index to disk (but not during unit tests)
+			await writeFile(
+				path.join(devicesDir, "index.json"),
+				`// This file is auto-generated. DO NOT edit it by hand if you don't know what you're doing!"
+${stringify(index, "\t")}
+`,
+				"utf8",
+			);
+			logger?.print("Device index regenerated", "verbose");
+		}
 	}
 
-	return index;
-}
-
-export async function saveDeviceIndex(index: DeviceConfigIndex): Promise<void> {
-	await writeFile(indexPath, stringify(index));
+	return index!;
 }
 
 function isHexKeyWith4Digits(val: any): val is string {
@@ -126,7 +178,7 @@ export class DeviceConfig {
 		if (!isHexKeyWith4Digits(definition.manufacturerId)) {
 			throwInvalidConfig(
 				`device`,
-				`config/devices/${filename}:
+				`packages/config/config/devices/${filename}:
 manufacturer id must be a hexadecimal number with 4 digits`,
 			);
 		}
@@ -136,7 +188,7 @@ manufacturer id must be a hexadecimal number with 4 digits`,
 			if (typeof definition[prop] !== "string") {
 				throwInvalidConfig(
 					`device`,
-					`config/devices/${filename}:
+					`packages/config/config/devices/${filename}:
 ${prop} is not a string`,
 				);
 			}
@@ -154,7 +206,7 @@ ${prop} is not a string`,
 		) {
 			throwInvalidConfig(
 				`device`,
-				`config/devices/${filename}:
+				`packages/config/config/devices/${filename}:
 devices is malformed (not an object or type/id that is not a 4-digit hex key)`,
 			);
 		}
@@ -171,7 +223,7 @@ devices is malformed (not an object or type/id that is not a 4-digit hex key)`,
 		) {
 			throwInvalidConfig(
 				`device`,
-				`config/devices/${filename}:
+				`packages/config/config/devices/${filename}:
 firmwareVersion is malformed or invalid`,
 			);
 		} else {
@@ -184,7 +236,7 @@ firmwareVersion is malformed or invalid`,
 			if (!isObject(definition.associations)) {
 				throwInvalidConfig(
 					`device`,
-					`config/devices/${filename}:
+					`packages/config/config/devices/${filename}:
 associations is not an object`,
 				);
 			}
@@ -194,7 +246,7 @@ associations is not an object`,
 				if (!/^[1-9][0-9]*$/.test(key))
 					throwInvalidConfig(
 						`device`,
-						`config/devices/${filename}:
+						`packages/config/config/devices/${filename}:
 found non-numeric group id "${key}" in associations`,
 					);
 				const keyNum = parseInt(key, 10);
@@ -214,7 +266,7 @@ found non-numeric group id "${key}" in associations`,
 			if (!isObject(definition.paramInformation)) {
 				throwInvalidConfig(
 					`device`,
-					`config/devices/${filename}:
+					`packages/config/config/devices/${filename}:
 paramInformation is not an object`,
 				);
 			}
@@ -225,7 +277,7 @@ paramInformation is not an object`,
 				if (!match) {
 					throwInvalidConfig(
 						`device`,
-						`config/devices/${filename}: 
+						`packages/config/config/devices/${filename}: 
 found invalid param number "${key}" in paramInformation`,
 					);
 				}
@@ -249,7 +301,7 @@ found invalid param number "${key}" in paramInformation`,
 			if (!isObject(definition.proprietary)) {
 				throwInvalidConfig(
 					`device`,
-					`config/devices/${filename}:
+					`packages/config/config/devices/${filename}:
 proprietary is not an object`,
 				);
 			}
@@ -260,7 +312,7 @@ proprietary is not an object`,
 			if (!isObject(definition.compat)) {
 				throwInvalidConfig(
 					`device`,
-					`config/devices/${filename}:
+					`packages/config/config/devices/${filename}:
 compat is not an object`,
 				);
 			}
@@ -298,7 +350,7 @@ export class AssociationConfig {
 		if (typeof definition.label !== "string") {
 			throwInvalidConfig(
 				"devices",
-				`config/devices/${filename}:
+				`packages/config/config/devices/${filename}:
 Association ${groupId} has a non-string label`,
 			);
 		}
@@ -310,7 +362,7 @@ Association ${groupId} has a non-string label`,
 		) {
 			throwInvalidConfig(
 				"devices",
-				`config/devices/${filename}:
+				`packages/config/config/devices/${filename}:
 Association ${groupId} has a non-string description`,
 			);
 		}
@@ -319,7 +371,7 @@ Association ${groupId} has a non-string description`,
 		if (typeof definition.maxNodes !== "number") {
 			throwInvalidConfig(
 				"devices",
-				`config/devices/${filename}:
+				`packages/config/config/devices/${filename}:
 maxNodes for association ${groupId} is not a number`,
 			);
 		}
@@ -331,7 +383,7 @@ maxNodes for association ${groupId} is not a number`,
 		) {
 			throwInvalidConfig(
 				"devices",
-				`config/devices/${filename}:
+				`packages/config/config/devices/${filename}:
 isLifeline in association ${groupId} must be either true or left out`,
 			);
 		}
@@ -343,7 +395,7 @@ isLifeline in association ${groupId} must be either true or left out`,
 		) {
 			throwInvalidConfig(
 				"devices",
-				`config/devices/${filename}:
+				`packages/config/config/devices/${filename}:
 noEndpoint in association ${groupId} must be either true or left out`,
 			);
 		}
@@ -363,244 +415,6 @@ noEndpoint in association ${groupId} must be either true or left out`,
 	public readonly noEndpoint: boolean;
 }
 
-export class CompatConfig {
-	private valueIdRegex = /^\$value\$\[.+\]$/;
-
-	public constructor(filename: string, definition: JSONObject) {
-		if (definition.queryOnWakeup != undefined) {
-			if (
-				!isArray(definition.queryOnWakeup) ||
-				!definition.queryOnWakeup.every(
-					(cmd: unknown) =>
-						isArray(cmd) &&
-						cmd.length >= 2 &&
-						typeof cmd[0] === "string" &&
-						typeof cmd[1] === "string" &&
-						cmd
-							.slice(2)
-							.every(
-								(arg) =>
-									typeof arg === "string" ||
-									typeof arg === "number" ||
-									typeof arg === "boolean",
-							),
-				)
-			) {
-				throwInvalidConfig(
-					"devices",
-					`config/devices/${filename}:
-error in compat option queryOnWakeup`,
-				);
-			}
-
-			// Parse "smart" values into partial Value IDs
-			this.queryOnWakeup = (definition.queryOnWakeup as any[][]).map(
-				(cmd) =>
-					cmd.map((arg) => {
-						if (
-							typeof arg === "string" &&
-							this.valueIdRegex.test(arg)
-						) {
-							const tuple = JSON.parse(
-								arg.substr("$value$".length),
-							);
-							return {
-								property: tuple[0],
-								propertyKey: tuple[1],
-							};
-						}
-						return arg;
-					}),
-			) as any;
-		}
-
-		if (definition.keepS0NonceUntilNext != undefined) {
-			if (definition.keepS0NonceUntilNext !== true) {
-				throwInvalidConfig(
-					"devices",
-					`config/devices/${filename}:
-error in compat option keepS0NonceUntilNext`,
-				);
-			}
-
-			this.keepS0NonceUntilNext = definition.keepS0NonceUntilNext;
-		}
-
-		if (definition.disableBasicMapping != undefined) {
-			if (definition.disableBasicMapping !== true) {
-				throwInvalidConfig(
-					"devices",
-					`config/devices/${filename}:
-error in compat option disableBasicMapping`,
-				);
-			}
-
-			this.disableBasicMapping = definition.disableBasicMapping;
-		}
-		if (definition.preserveRootApplicationCCValueIDs != undefined) {
-			if (definition.preserveRootApplicationCCValueIDs !== true) {
-				throwInvalidConfig(
-					"devices",
-					`config/devices/${filename}:
-error in compat option preserveRootApplicationCCValueIDs`,
-				);
-			}
-
-			this.preserveRootApplicationCCValueIDs =
-				definition.preserveRootApplicationCCValueIDs;
-		}
-
-		if (definition.commandClasses != undefined) {
-			if (!isObject(definition.commandClasses)) {
-				throwInvalidConfig(
-					"devices",
-					`config/devices/${filename}:
-error in compat option commandClasses`,
-				);
-			}
-
-			if (definition.commandClasses.add != undefined) {
-				if (!isObject(definition.commandClasses.add)) {
-					throwInvalidConfig(
-						"devices",
-						`config/devices/${filename}:
-error in compat option commandClasses.add`,
-					);
-				} else if (
-					!Object.keys(definition.commandClasses.add).every((k) =>
-						hexKeyRegex2Digits.test(k),
-					)
-				) {
-					throwInvalidConfig(
-						"devices",
-						`config/devices/${filename}:
-All keys in compat option commandClasses.add must be 2-digit hex numbers!`,
-					);
-				} else if (
-					!Object.values(definition.commandClasses.add).every((v) =>
-						isObject(v),
-					)
-				) {
-					throwInvalidConfig(
-						"devices",
-						`config/devices/${filename}:
-All values in compat option commandClasses.add must be objects`,
-					);
-				}
-
-				const addCCs = new Map<CommandClasses, CompatAddCC>();
-				for (const [cc, info] of Object.entries(
-					definition.commandClasses.add,
-				)) {
-					addCCs.set(
-						parseInt(cc),
-						new CompatAddCC(filename, info as any),
-					);
-				}
-				this.addCCs = addCCs;
-			}
-		}
-	}
-
-	public readonly addCCs?: ReadonlyMap<CommandClasses, CompatAddCC>;
-	public readonly disableBasicMapping?: boolean;
-	public readonly keepS0NonceUntilNext?: boolean;
-	public readonly preserveRootApplicationCCValueIDs?: boolean;
-	public readonly queryOnWakeup?: readonly [
-		string,
-		string,
-		...(
-			| string
-			| number
-			| boolean
-			| Pick<ValueID, "property" | "propertyKey">
-		)[]
-	][];
-}
-
-export class CompatAddCC {
-	public constructor(filename: string, definition: JSONObject) {
-		const endpoints = new Map<number, Partial<CommandClassInfo>>();
-		const parseEndpointInfo = (endpoint: number, info: JSONObject) => {
-			const parsed: Partial<CommandClassInfo> = {};
-			if (info.isSupported != undefined) {
-				if (typeof info.isSupported !== "boolean") {
-					throwInvalidConfig(
-						"devices",
-						`config/devices/${filename}:
-Property isSupported in compat option commandClasses.add, endpoint ${endpoint} must be a boolean!`,
-					);
-				} else {
-					parsed.isSupported = info.isSupported;
-				}
-			}
-			if (info.isControlled != undefined) {
-				if (typeof info.isControlled !== "boolean") {
-					throwInvalidConfig(
-						"devices",
-						`config/devices/${filename}:
-Property isControlled in compat option commandClasses.add, endpoint ${endpoint} must be a boolean!`,
-					);
-				} else {
-					parsed.isControlled = info.isControlled;
-				}
-			}
-			if (info.secure != undefined) {
-				if (typeof info.secure !== "boolean") {
-					throwInvalidConfig(
-						"devices",
-						`config/devices/${filename}:
-Property secure in compat option commandClasses.add, endpoint ${endpoint} must be a boolean!`,
-					);
-				} else {
-					parsed.secure = info.secure;
-				}
-			}
-			if (info.version != undefined) {
-				if (typeof info.version !== "number") {
-					throwInvalidConfig(
-						"devices",
-						`config/devices/${filename}:
-Property version in compat option commandClasses.add, endpoint ${endpoint} must be a number!`,
-					);
-				} else {
-					parsed.version = info.version;
-				}
-			}
-			endpoints.set(endpoint, parsed);
-		};
-		// Parse root endpoint info if given
-		if (
-			definition.isSupported != undefined ||
-			definition.isControlled != undefined ||
-			definition.version != undefined ||
-			definition.secure != undefined
-		) {
-			// We have info for the root endpoint
-			parseEndpointInfo(0, definition);
-		}
-		// Parse all other endpoints
-		if (isObject(definition.endpoints)) {
-			if (
-				!Object.keys(definition.endpoints).every((k) => /^\d+$/.test(k))
-			) {
-				throwInvalidConfig(
-					"devices",
-					`config/devices/${filename}:
-invalid endpoint index in compat option commandClasses.add`,
-				);
-			} else {
-				for (const [ep, info] of Object.entries(definition.endpoints)) {
-					parseEndpointInfo(parseInt(ep), info as any);
-				}
-			}
-		}
-		this.endpoints = endpoints;
-	}
-
-	public readonly endpoints: ReadonlyMap<number, Partial<CommandClassInfo>>;
-}
-
 export class ParamInformation {
 	public constructor(
 		filename: string,
@@ -614,7 +428,7 @@ export class ParamInformation {
 		if (typeof definition.label !== "string") {
 			throwInvalidConfig(
 				"devices",
-				`config/devices/${filename}:
+				`packages/config/config/devices/${filename}:
 Parameter #${parameterNumber} has a non-string label`,
 			);
 		}
@@ -626,7 +440,7 @@ Parameter #${parameterNumber} has a non-string label`,
 		) {
 			throwInvalidConfig(
 				"devices",
-				`config/devices/${filename}:
+				`packages/config/config/devices/${filename}:
 Parameter #${parameterNumber} has a non-string description`,
 			);
 		}
@@ -638,7 +452,7 @@ Parameter #${parameterNumber} has a non-string description`,
 		) {
 			throwInvalidConfig(
 				"devices",
-				`config/devices/${filename}:
+				`packages/config/config/devices/${filename}:
 Parameter #${parameterNumber} has an invalid value size`,
 			);
 		}
@@ -647,7 +461,7 @@ Parameter #${parameterNumber} has an invalid value size`,
 		if (typeof definition.minValue !== "number") {
 			throwInvalidConfig(
 				"devices",
-				`config/devices/${filename}:
+				`packages/config/config/devices/${filename}:
 Parameter #${parameterNumber} has a non-numeric property minValue`,
 			);
 		}
@@ -656,7 +470,7 @@ Parameter #${parameterNumber} has a non-numeric property minValue`,
 		if (typeof definition.maxValue !== "number") {
 			throwInvalidConfig(
 				"devices",
-				`config/devices/${filename}:
+				`packages/config/config/devices/${filename}:
 Parameter #${parameterNumber} has a non-numeric property maxValue`,
 			);
 		}
@@ -665,7 +479,7 @@ Parameter #${parameterNumber} has a non-numeric property maxValue`,
 		if (typeof definition.defaultValue !== "number") {
 			throwInvalidConfig(
 				"devices",
-				`config/devices/${filename}:
+				`packages/config/config/devices/${filename}:
 Parameter #${parameterNumber} has a non-numeric property defaultValue`,
 			);
 		}
@@ -677,7 +491,7 @@ Parameter #${parameterNumber} has a non-numeric property defaultValue`,
 		) {
 			throwInvalidConfig(
 				"devices",
-				`config/devices/${filename}:
+				`packages/config/config/devices/${filename}:
 Parameter #${parameterNumber} has a non-boolean property unsigned`,
 			);
 		}
@@ -686,7 +500,7 @@ Parameter #${parameterNumber} has a non-boolean property unsigned`,
 		if (typeof definition.readOnly !== "boolean") {
 			throwInvalidConfig(
 				"devices",
-				`config/devices/${filename}:
+				`packages/config/config/devices/${filename}:
 Parameter #${parameterNumber}: readOnly must be a boolean!`,
 			);
 		}
@@ -695,7 +509,7 @@ Parameter #${parameterNumber}: readOnly must be a boolean!`,
 		if (typeof definition.writeOnly !== "boolean") {
 			throwInvalidConfig(
 				"devices",
-				`config/devices/${filename}:
+				`packages/config/config/devices/${filename}:
 Parameter #${parameterNumber}: writeOnly must be a boolean!`,
 			);
 		}
@@ -704,7 +518,7 @@ Parameter #${parameterNumber}: writeOnly must be a boolean!`,
 		if (typeof definition.allowManualEntry !== "boolean") {
 			throwInvalidConfig(
 				"devices",
-				`config/devices/${filename}:
+				`packages/config/config/devices/${filename}:
 Parameter #${parameterNumber}: allowManualEntry must be a boolean!`,
 			);
 		}
@@ -721,7 +535,7 @@ Parameter #${parameterNumber}: allowManualEntry must be a boolean!`,
 		) {
 			throwInvalidConfig(
 				"devices",
-				`config/devices/${filename}:
+				`packages/config/config/devices/${filename}:
 Parameter #${parameterNumber}: options is malformed!`,
 			);
 		}

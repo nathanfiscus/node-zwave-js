@@ -120,7 +120,7 @@
 					"value": 4
 				},
 				{
-					"label": "Level 5 (Default)",
+					"label": "Level 5",
 					"value": 5
 				},
 				{
@@ -224,7 +224,7 @@
 			"description": "Enables use of the Updater app",
 			"valueSize": 1,
 			"minValue": 0,
-			"maxValue": 0,
+			"maxValue": 3,
 			"defaultValue": 0,
 			"readOnly": false,
 			"writeOnly": false,

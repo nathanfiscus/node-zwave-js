@@ -7,13 +7,21 @@ const { generateAuthKey, generateEncryptionKey } = require("@zwave-js/core");
 const {
 	isCommandClassContainer,
 } = require("../packages/zwave-js/build/lib/commandclass/ICommandClassContainer");
-const { loadNotifications } = require("@zwave-js/config");
+const { ConfigManager } = require("@zwave-js/config");
 
 (async () => {
-	await loadNotifications();
+	const configManager = new ConfigManager();
+	await configManager.loadDeviceClasses();
+	await configManager.loadManufacturers();
+	await configManager.loadDeviceIndex();
+	await configManager.loadNotifications();
+	await configManager.loadNamedScales();
+	await configManager.loadSensorTypes();
+	await configManager.loadMeters();
+	await configManager.loadIndicators();
 
 	// The data to decode
-	const data = Buffer.from("0112000400300a710500ff00ff06050101ae000a", "hex");
+	const data = Buffer.from("010b0004001e05700d002000b6", "hex");
 	// The nonce needed to decode it
 	const nonce = Buffer.from("478d7aa05d83f3ea", "hex");
 	// The network key needed to decode it
@@ -23,6 +31,7 @@ const { loadNotifications } = require("@zwave-js/config");
 	const msg = Message.from(
 		/** @type {any} */ ({
 			getSafeCCVersionForNode: () => 1,
+			configManager,
 			controller: {
 				ownNodeId: 1,
 				nodes: {
@@ -31,6 +40,7 @@ const { loadNotifications } = require("@zwave-js/config");
 							valueDB: {
 								hasMetadata: () => false,
 								setMetadata() {},
+								getMetadata() {},
 								setValue() {},
 								getValue() {},
 							},

@@ -45,7 +45,7 @@
 					"value": 0
 				},
 				{
-					"label": "(Default) Enable",
+					"label": "Enable",
 					"value": 1
 				}
 			]
@@ -62,7 +62,7 @@
 			"allowManualEntry": false,
 			"options": [
 				{
-					"label": "(Default) Disable",
+					"label": "Disable",
 					"value": 0
 				},
 				{
@@ -250,7 +250,7 @@
 			"allowManualEntry": false,
 			"options": [
 				{
-					"label": "(Default) Disable",
+					"label": "Disable",
 					"value": 0
 				},
 				{
@@ -429,7 +429,7 @@
 			"description": "Configure the external switch mode for S1",
 			"valueSize": 1,
 			"minValue": 0,
-			"maxValue": 0,
+			"maxValue": 3,
 			"defaultValue": 0,
 			"readOnly": false,
 			"writeOnly": false,
@@ -458,7 +458,7 @@
 			"description": "Configure the external switch mode for S2",
 			"valueSize": 1,
 			"minValue": 0,
-			"maxValue": 0,
+			"maxValue": 3,
 			"defaultValue": 0,
 			"readOnly": false,
 			"writeOnly": false,
@@ -512,7 +512,7 @@
 			"description": "Lock/unlock configuration parameters",
 			"valueSize": 1,
 			"minValue": 0,
-			"maxValue": 0,
+			"maxValue": 1,
 			"defaultValue": 0,
 			"readOnly": false,
 			"writeOnly": false,
@@ -532,14 +532,14 @@
 			"label": "Reset the Nano Switch",
 			"valueSize": 4,
 			"minValue": 0,
-			"maxValue": 0,
+			"maxValue": 1431655765,
 			"defaultValue": 0,
 			"readOnly": false,
 			"writeOnly": false,
 			"allowManualEntry": false,
 			"options": [
 				{
-					"label": "(Default) Reset all configuration parameters",
+					"label": "Reset all configuration parameters",
 					"value": 0
 				},
 				{

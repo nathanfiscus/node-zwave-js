@@ -356,7 +356,7 @@
 		},
 		"47": {
 			"label": "Variation Total Energy",
-			"description": "Defines the increase energy  to generate a report",
+			"description": "Defines the increase energy to generate a report",
 			"valueSize": 1,
 			"minValue": 0,
 			"maxValue": 4,
@@ -587,7 +587,7 @@
 					"value": 3
 				},
 				{
-					"label": "AS_AN_EXTERNAL_INDICATOR:",
+					"label": "AS_AN_EXTERNAL_INDICATOR",
 					"value": 4
 				}
 			]

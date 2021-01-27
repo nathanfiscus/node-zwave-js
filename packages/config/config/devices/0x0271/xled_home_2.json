@@ -30,7 +30,7 @@
 		},
 		"2": {
 			"label": "LIGHT",
-			"description": "Light threshold [lx]:",
+			"description": "Light threshold [lx]",
 			"valueSize": 2,
 			"minValue": 2,
 			"maxValue": 2000,
@@ -88,7 +88,7 @@
 			"description": "Off behaviour (timeout)",
 			"valueSize": 2,
 			"minValue": 0,
-			"maxValue": 209,
+			"maxValue": 255,
 			"defaultValue": 10,
 			"readOnly": false,
 			"writeOnly": false,

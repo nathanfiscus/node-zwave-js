@@ -16,6 +16,8 @@ import type { Driver } from "../driver/Driver";
 import { MessagePriority } from "../message/Constants";
 import {
 	CCAPI,
+	PollValueImplementation,
+	POLL_VALUE,
 	SetValueImplementation,
 	SET_VALUE,
 	throwUnsupportedProperty,
@@ -100,7 +102,7 @@ function getCurrentValueValueID(endpoint: number): ValueID {
 
 function getTargetValueValueId(endpoint?: number): ValueID {
 	return {
-		commandClass: CommandClasses["Binary Switch"],
+		commandClass: CommandClasses["Multilevel Switch"],
 		endpoint,
 		property: "targetValue",
 	};
@@ -152,6 +154,8 @@ export class MultilevelSwitchCCAPI extends CCAPI {
 		};
 	}
 
+	private refreshTimeout: NodeJS.Timeout | undefined;
+
 	/**
 	 * Sets the switch to a new value
 	 * @param targetValue The new target value for the switch
@@ -192,7 +196,9 @@ export class MultilevelSwitchCCAPI extends CCAPI {
 						status === SupervisionStatus.Working ||
 						status === SupervisionStatus.Success
 					) {
-						void this.get().catch();
+						void this.get().catch(() => {
+							/* ignore */
+						});
 					}
 				},
 			},
@@ -201,12 +207,19 @@ export class MultilevelSwitchCCAPI extends CCAPI {
 		// Refresh the current value
 		if (
 			!supervisionResult ||
-			supervisionResult.status === SupervisionStatus.Working ||
 			supervisionResult.status === SupervisionStatus.Success
 		) {
 			if (this.isSinglecast()) {
-				// Refresh the current value
-				await this.get();
+				// Refresh the current value after a delay
+				if (this.refreshTimeout) clearTimeout(this.refreshTimeout);
+				setTimeout(async () => {
+					this.refreshTimeout = undefined;
+					try {
+						await this.get();
+					} catch {
+						/* ignore */
+					}
+				}, duration?.toMilliseconds() ?? this.driver.options.timeouts.refreshValue).unref();
 			}
 		}
 	}
@@ -365,6 +378,19 @@ export class MultilevelSwitchCCAPI extends CCAPI {
 			}
 		} else {
 			throwUnsupportedProperty(this.ccId, property);
+		}
+	};
+
+	protected [POLL_VALUE]: PollValueImplementation = async ({
+		property,
+	}): Promise<unknown> => {
+		switch (property) {
+			case "currentValue":
+			case "targetValue":
+			case "duration":
+				return (await this.get())?.[property];
+			default:
+				throwUnsupportedProperty(this.ccId, property);
 		}
 	};
 }
@@ -567,7 +593,7 @@ export class MultilevelSwitchCCReport extends MultilevelSwitchCC {
 	private _duration: Duration | undefined;
 	@ccValue()
 	@ccValueMetadata({
-		...ValueMetadata.Any,
+		...ValueMetadata.Duration,
 		label: "Transition duration",
 	})
 	public get duration(): Duration | undefined {

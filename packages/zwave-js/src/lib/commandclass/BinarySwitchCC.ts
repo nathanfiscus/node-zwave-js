@@ -16,6 +16,8 @@ import type { Driver } from "../driver/Driver";
 import { MessagePriority } from "../message/Constants";
 import {
 	CCAPI,
+	PollValueImplementation,
+	POLL_VALUE,
 	SetValueImplementation,
 	SET_VALUE,
 	throwUnsupportedProperty,
@@ -85,6 +87,8 @@ export class BinarySwitchCCAPI extends CCAPI {
 		};
 	}
 
+	private refreshTimeout: NodeJS.Timeout | undefined;
+
 	/**
 	 * Sets the switch to the given value
 	 * @param targetValue The target value to set
@@ -115,8 +119,16 @@ export class BinarySwitchCCAPI extends CCAPI {
 		await this.driver.sendCommand(cc, this.commandOptions);
 
 		if (this.isSinglecast()) {
-			// Refresh the current value
-			await this.get();
+			// Refresh the current value after a delay
+			if (this.refreshTimeout) clearTimeout(this.refreshTimeout);
+			setTimeout(async () => {
+				this.refreshTimeout = undefined;
+				try {
+					await this.get();
+				} catch {
+					/* ignore */
+				}
+			}, duration?.toMilliseconds() ?? 1000).unref();
 		}
 	}
 
@@ -131,6 +143,19 @@ export class BinarySwitchCCAPI extends CCAPI {
 			throwWrongValueType(this.ccId, property, "boolean", typeof value);
 		}
 		await this.set(value);
+	};
+
+	protected [POLL_VALUE]: PollValueImplementation = async ({
+		property,
+	}): Promise<unknown> => {
+		switch (property) {
+			case "currentValue":
+			case "targetValue":
+			case "duration":
+				return (await this.get())?.[property];
+			default:
+				throwUnsupportedProperty(this.ccId, property);
+		}
 	};
 }
 
@@ -286,7 +311,7 @@ export class BinarySwitchCCReport extends BinarySwitchCC {
 	private _duration: Duration | undefined;
 	@ccValue({ minVersion: 2 })
 	@ccValueMetadata({
-		...ValueMetadata.Any,
+		...ValueMetadata.Duration,
 		label: "Transition duration",
 	})
 	public get duration(): Duration | undefined {

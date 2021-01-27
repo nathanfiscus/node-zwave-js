@@ -47,7 +47,7 @@
 			"description": "LCD Timeout",
 			"unit": "s",
 			"valueSize": 1,
-			"minValue": 5,
+			"minValue": 0,
 			"maxValue": 30,
 			"defaultValue": 0,
 			"readOnly": false,
@@ -103,7 +103,7 @@
 			]
 		},
 		"5": {
-			"label": "Measured  Temperature report",
+			"label": "Measured Temperature report",
 			"description": "Measured Temperature report",
 			"unit": "°C",
 			"valueSize": 1,
@@ -115,7 +115,7 @@
 			"allowManualEntry": true
 		},
 		"6": {
-			"label": "Valve opening  percentage report",
+			"label": "Valve opening percentage report",
 			"description": "Valve opening percentage report",
 			"unit": "%",
 			"valueSize": 1,
@@ -160,7 +160,7 @@
 			"description": "Measured Temperature offset",
 			"unit": "1/10 °C",
 			"valueSize": 1,
-			"minValue": -50,
+			"minValue": -128,
 			"maxValue": 50,
 			"defaultValue": 0,
 			"readOnly": false,
@@ -169,7 +169,7 @@
 			"options": [
 				{
 					"label": "Ext temp sensor be used for regul",
-					"value": 128
+					"value": -128
 				}
 			]
 		}

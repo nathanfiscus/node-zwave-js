@@ -331,6 +331,11 @@ export class ConfigManager {
 		return this.meters.get(meterType);
 	}
 
+	public getMeterName(meterType: number): string {
+		const meter = this.lookupMeter(meterType);
+		return meter?.name ?? `UNKNOWN (${num2hex(meterType)})`;
+	}
+
 	/** Looks up a scale definition for a given meter type */
 	public lookupMeterScale(type: number, scale: number): MeterScale {
 		const meter = this.lookupMeter(type);
@@ -408,7 +413,7 @@ export class ConfigManager {
 
 	public async loadDeviceIndex(): Promise<void> {
 		try {
-			this.index = await loadDeviceIndexInternal();
+			this.index = await loadDeviceIndexInternal(this.logger);
 		} catch (e: unknown) {
 			// If the index file is missing or invalid, don't try to find it again
 			if (
@@ -444,12 +449,8 @@ export class ConfigManager {
 		productId: number,
 		firmwareVersion?: string | false,
 	): Promise<DeviceConfig | undefined> {
-		if (!this.index) {
-			throw new ZWaveError(
-				"The config has not been loaded yet!",
-				ZWaveErrorCodes.Driver_NotReady,
-			);
-		}
+		// Load/regenerate the index if necessary
+		if (!this.index) await this.loadDeviceIndex();
 
 		// Look up the device in the index
 		let indexEntry: DeviceConfigIndexEntry | undefined;
@@ -460,11 +461,11 @@ export class ConfigManager {
 				productType,
 				productId,
 			);
-			indexEntry = this.index.find(
+			indexEntry = this.index!.find(
 				(e) => e.firmwareVersion === false && predicate(e),
 			);
 		} else {
-			indexEntry = this.index.find(
+			indexEntry = this.index!.find(
 				getDeviceEntryPredicate(
 					manufacturerId,
 					productType,

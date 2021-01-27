@@ -29,7 +29,7 @@
 			"allowManualEntry": false,
 			"options": [
 				{
-					"label": "Separate mode (toggle mode). (Default)",
+					"label": "Separate mode (toggle mode).",
 					"value": 0
 				},
 				{
@@ -50,7 +50,7 @@
 			"allowManualEntry": false,
 			"options": [
 				{
-					"label": "Separate mode (toggle mode). (Default)",
+					"label": "Separate mode (toggle mode).",
 					"value": 0
 				},
 				{
@@ -71,7 +71,7 @@
 			"allowManualEntry": false,
 			"options": [
 				{
-					"label": "Separate mode (toggle mode). (Default)",
+					"label": "Separate mode (toggle mode).",
 					"value": 0
 				},
 				{
@@ -96,7 +96,7 @@
 					"value": 0
 				},
 				{
-					"label": "LED indicates the status of the corresponding button. (Default)",
+					"label": "LED indicates the status of the corresponding button.",
 					"value": 1
 				},
 				{
@@ -145,7 +145,7 @@
 					"value": 0
 				},
 				{
-					"label": "LED indicates the status of the corresponding button. (Default)",
+					"label": "LED indicates the status of the corresponding button.",
 					"value": 1
 				},
 				{
@@ -194,7 +194,7 @@
 					"value": 0
 				},
 				{
-					"label": "LED indicates the status of the corresponding button. (Default)",
+					"label": "LED indicates the status of the corresponding button.",
 					"value": 1
 				},
 				{
@@ -243,7 +243,7 @@
 					"value": 0
 				},
 				{
-					"label": "LED indicates the status of the corresponding button. (Default)",
+					"label": "LED indicates the status of the corresponding button.",
 					"value": 1
 				},
 				{
@@ -292,7 +292,7 @@
 					"value": 0
 				},
 				{
-					"label": "LED indicates the status of the corresponding button. (Default)",
+					"label": "LED indicates the status of the corresponding button.",
 					"value": 1
 				},
 				{
@@ -341,7 +341,7 @@
 					"value": 0
 				},
 				{
-					"label": "LED indicates the status of the corresponding button. (Default)",
+					"label": "LED indicates the status of the corresponding button.",
 					"value": 1
 				},
 				{
@@ -452,7 +452,7 @@
 			"allowManualEntry": false,
 			"options": [
 				{
-					"label": "House Cleaning Mode is enabled (Default)",
+					"label": "House Cleaning Mode is enabled",
 					"value": 0
 				},
 				{
@@ -653,8 +653,9 @@
 			"label": "Button #1: Multilevel Switch (upper value)",
 			"valueSize": 4,
 			"minValue": 0,
-			"maxValue": 99,
+			"maxValue": 255,
 			"defaultValue": 255,
+			"unsigned": true,
 			"readOnly": false,
 			"writeOnly": false,
 			"allowManualEntry": true,
@@ -705,8 +706,9 @@
 			"label": "Button #2: Multilevel Switch (upper value)",
 			"valueSize": 4,
 			"minValue": 0,
-			"maxValue": 99,
+			"maxValue": 255,
 			"defaultValue": 255,
+			"unsigned": true,
 			"readOnly": false,
 			"writeOnly": false,
 			"allowManualEntry": true,
@@ -757,8 +759,9 @@
 			"label": "Button #3: Multilevel Switch (upper value)",
 			"valueSize": 4,
 			"minValue": 0,
-			"maxValue": 99,
+			"maxValue": 255,
 			"defaultValue": 255,
+			"unsigned": true,
 			"readOnly": false,
 			"writeOnly": false,
 			"allowManualEntry": true,
@@ -809,8 +812,9 @@
 			"label": "Button #4: Multilevel Switch (upper value)",
 			"valueSize": 4,
 			"minValue": 0,
-			"maxValue": 99,
+			"maxValue": 255,
 			"defaultValue": 255,
+			"unsigned": true,
 			"readOnly": false,
 			"writeOnly": false,
 			"allowManualEntry": true,
@@ -861,8 +865,9 @@
 			"label": "Button #5: Multilevel Switch (upper value)",
 			"valueSize": 4,
 			"minValue": 0,
-			"maxValue": 99,
+			"maxValue": 255,
 			"defaultValue": 255,
+			"unsigned": true,
 			"readOnly": false,
 			"writeOnly": false,
 			"allowManualEntry": true,
@@ -913,8 +918,9 @@
 			"label": "Button #6: Multilevel Switch (upper value)",
 			"valueSize": 4,
 			"minValue": 0,
-			"maxValue": 99,
+			"maxValue": 255,
 			"defaultValue": 255,
+			"unsigned": true,
 			"readOnly": false,
 			"writeOnly": false,
 			"allowManualEntry": true,

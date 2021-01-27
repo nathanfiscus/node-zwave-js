@@ -68,9 +68,9 @@ import {
 	ApplicationUpdateRequest,
 	ApplicationUpdateRequestNodeInfoReceived,
 } from "../controller/ApplicationUpdateRequest";
+import { BridgeApplicationCommandRequest } from "../controller/BridgeApplicationCommandRequest";
 import { ZWaveController } from "../controller/Controller";
 import {
-	isTransmitReport,
 	MAX_SEND_ATTEMPTS,
 	SendDataAbort,
 	SendDataMulticastRequest,
@@ -127,8 +127,12 @@ export interface ZWaveOptions {
 		report: number; // [1000...40000], default: 10000 ms
 		/** How long generated nonces are valid */
 		nonce: number; // [3000...20000], default: 5000 ms
-		/** How long a node is assumed to be awake after the last communication with it */
-		nodeAwake: number; // [1000...30000], default: 10000 ms
+
+		/**
+		 * @internal
+		 * How long to wait for a poll after setting a value
+		 */
+		refreshValue: number;
 	};
 
 	attempts: {
@@ -183,7 +187,7 @@ const defaultOptions: ZWaveOptions = {
 		report: 10000,
 		nonce: 5000,
 		sendDataCallback: 65000, // as defined in INS13954
-		nodeAwake: 10000,
+		refreshValue: 5000, // Default should handle most slow devices until we have a better solution
 	},
 	attempts: {
 		controller: 3,
@@ -258,15 +262,6 @@ function checkOptions(options: ZWaveOptions): void {
 	if (options.timeouts.sendDataCallback < 10000) {
 		throw new ZWaveError(
 			`The Send Data Callback timeout must be at least 10000 milliseconds!`,
-			ZWaveErrorCodes.Driver_InvalidOptions,
-		);
-	}
-	if (
-		options.timeouts.nodeAwake < 1000 ||
-		options.timeouts.nodeAwake > 30000
-	) {
-		throw new ZWaveError(
-			`The Node awake timeout must be between 1000 and 30000 milliseconds!`,
 			ZWaveErrorCodes.Driver_InvalidOptions,
 		);
 	}
@@ -569,7 +564,7 @@ export class Driver extends EventEmitter {
 						});
 					}
 				},
-				log: this.driverLog.print.bind(this),
+				log: this.driverLog.print.bind(this.driverLog),
 			},
 			pick(this.options, ["timeouts", "attempts"]),
 		);
@@ -737,6 +732,12 @@ export class Driver extends EventEmitter {
 	private _controllerInterviewed: boolean = false;
 	private _nodesReady = new Set<number>();
 	private _nodesReadyEventEmitted: boolean = false;
+
+	/** Indicates whether all nodes are ready, i.e. the "all nodes ready" event has been emitted */
+	public get allNodesReady(): boolean {
+		return this._nodesReadyEventEmitted;
+	}
+
 	/**
 	 * Initializes the variables for controller and nodes,
 	 * adds event handlers and starts the interview process.
@@ -852,6 +853,15 @@ export class Driver extends EventEmitter {
 			clearTimeout(this.retryNodeInterviewTimeouts.get(node.id)!);
 			this.retryNodeInterviewTimeouts.delete(node.id);
 		}
+
+		// Drop all pending messages that come from a previous interview attempt
+		this.rejectTransactions(
+			(t) =>
+				t.priority === MessagePriority.NodeQuery &&
+				t.message.getNodeId() === node.id,
+			"The interview was restarted",
+			ZWaveErrorCodes.Controller_MessageDropped,
+		);
 
 		const maxInterviewAttempts = this.options.attempts.nodeInterview;
 
@@ -1085,6 +1095,19 @@ export class Driver extends EventEmitter {
 			);
 		});
 
+		// Remove the node id from all cached neighbor lists and asynchronously make the affected nodes update their neighbor lists
+		for (const otherNode of this.controller.nodes.values()) {
+			if (otherNode !== node && otherNode.neighbors.includes(node.id)) {
+				otherNode.removeNodeFromCachedNeighbors(node.id);
+				otherNode.queryNeighborsInternal().catch((err) => {
+					this.driverLog.print(
+						`Failed to update neighbors for node ${otherNode.id}: ${err.message}`,
+						"warn",
+					);
+				});
+			}
+		}
+
 		// And clean up all remaining resources used by the node
 		node.destroy();
 
@@ -1237,6 +1260,16 @@ export class Driver extends EventEmitter {
 		}
 	}
 
+	/** Indicates whether the driver is ready, i.e. the "driver ready" event was emitted */
+	public get ready(): boolean {
+		return (
+			this._wasStarted &&
+			this._isOpen &&
+			!this._wasDestroyed &&
+			this._controllerInterviewed
+		);
+	}
+
 	private _cleanupHandler = (): void => {
 		void this.destroy();
 	};
@@ -1294,6 +1327,9 @@ export class Driver extends EventEmitter {
 		process.removeListener("exit", this._cleanupHandler);
 		process.removeListener("SIGINT", this._cleanupHandler);
 		process.removeListener("uncaughtException", this._cleanupHandler);
+
+		// destroy loggers as the very last thing
+		this.logContainer.destroy();
 	}
 
 	private serialport_onError(err: Error): void {
@@ -1353,12 +1389,6 @@ export class Driver extends EventEmitter {
 
 				// Assemble partial CCs on the driver level. Only forward complete messages to the send thread machine
 				if (!this.assemblePartialCCs(msg)) return;
-			} else if (isTransmitReport(msg) && msg.isOK()) {
-				// The node acknowledged a message so it must be awake - refresh its awake timer (GH#1068)
-				const node = msg.getNodeUnsafe();
-				if (node && node.supportsCC(CommandClasses["Wake Up"])) {
-					node.refreshAwakeTimer();
-				}
 			}
 
 			this.driverLog.logMessage(msg, { direction: "inbound" });
@@ -1415,7 +1445,11 @@ export class Driver extends EventEmitter {
 
 				case ZWaveErrorCodes.PacketFormat_InvalidPayload:
 					this.driverLog.print(
-						`Message with invalid data received. Dropping it:
+						`Dropping message with invalid data${
+							typeof e.context === "string"
+								? ` (Reason: ${e.context})`
+								: ""
+						}:
 0x${data.toString("hex")}`,
 						"warn",
 					);
@@ -1482,8 +1516,17 @@ It is probably asleep, moving its messages to the wakeup queue.`,
 			);
 			// Mark the node as asleep
 			// The handler for the asleep status will move the messages to the wakeup queue
-			// We need to re-add the current transaction because otherwise it will be dropped
-			this.sendThread.send({ type: "add", transaction });
+			// We need to re-add the current transaction if that is allowed because otherwise it will be dropped silently
+			if (this.mayMoveToWakeupQueue(transaction)) {
+				this.sendThread.send({ type: "add", transaction });
+			} else {
+				transaction.promise.reject(
+					new ZWaveError(
+						`The node is asleep`,
+						ZWaveErrorCodes.Controller_MessageDropped,
+					),
+				);
+			}
 			node.markAsAsleep();
 			return true;
 		} else {
@@ -1736,7 +1779,10 @@ ${handlers.length} left`,
 			if (!this.mayHandleUnsolicitedCommand(msg.command)) return;
 		}
 
-		if (msg instanceof ApplicationCommandRequest) {
+		if (
+			msg instanceof ApplicationCommandRequest ||
+			msg instanceof BridgeApplicationCommandRequest
+		) {
 			// we handle ApplicationCommandRequests differently because they are handled by the nodes directly
 			const nodeId = msg.command.nodeId;
 			// cannot handle ApplicationCommandRequests without a controller
@@ -1949,12 +1995,9 @@ ${handlers.length} left`,
 		let node: ZWaveNode | undefined;
 
 		// Don't send messages to dead nodes
-		if (
-			isNodeQuery(msg) ||
-			(isCommandClassContainer(msg) && !messageIsPing(msg))
-		) {
+		if (isNodeQuery(msg) || isCommandClassContainer(msg)) {
 			node = msg.getNodeUnsafe();
-			if (node?.status === NodeStatus.Dead) {
+			if (!messageIsPing(msg) && node?.status === NodeStatus.Dead) {
 				// Instead of throwing immediately, try to ping the node first - if it responds, continue
 				if (!(await node.ping())) {
 					throw new ZWaveError(
@@ -2055,12 +2098,12 @@ ${handlers.length} left`,
 			if (expirationTimeout) clearTimeout(expirationTimeout);
 			if (node) {
 				if (node.supportsCC(CommandClasses["Wake Up"])) {
-					// The node responded, refresh its awake timer
-					node.refreshAwakeTimer();
 					// If the node is not meant to be kept awake, try to send it back to sleep
 					if (!node.keepAwake) {
 						this.debounceSendNodeToSleep(node);
 					}
+					// The node must be awake because it answered
+					node.markAsAwake();
 				} else if (node.status !== NodeStatus.Alive) {
 					// The node status was unknown or dead - in either case it must be alive because it answered
 					node.markAsAlive();
@@ -2241,6 +2284,27 @@ ${handlers.length} left`,
 		});
 	}
 
+	/** Checks if a message is allowed to go into the wakeup queue */
+	private mayMoveToWakeupQueue(transaction: Transaction): boolean {
+		const msg = transaction.message;
+		switch (true) {
+			// Pings and handshake responses will block the send queue until wakeup,
+			// so they must be dropped
+			case messageIsPing(msg):
+			case transaction.priority === MessagePriority.Handshake:
+			// Outgoing handshake requests are very likely not valid after wakeup, so drop them too
+			case transaction.priority === MessagePriority.PreTransmitHandshake:
+			// We also don't want to immediately send the node to sleep when it wakes up
+			case isCommandClassContainer(msg) &&
+				msg.command instanceof WakeUpCCNoMoreInformation:
+			// compat queries because they will be recreated when the node wakes up
+			case transaction.tag === "compat":
+				return false;
+		}
+
+		return true;
+	}
+
 	/** Moves all messages for a given node into the wakeup queue */
 	private moveMessagesToWakeupQueue(nodeId: number): void {
 		const reject: TransactionReducerResult = {
@@ -2253,39 +2317,12 @@ ${handlers.length} left`,
 			priority: MessagePriority.WakeUp,
 		};
 
-		const reducer: TransactionReducer = (transaction, source) => {
+		const reducer: TransactionReducer = (transaction, _source) => {
 			const msg = transaction.message;
 			if (msg.getNodeId() !== nodeId) return { type: "keep" };
-
-			// Remove compat queries because they will be recreated when the node wakes up
-			if (transaction.tag === "compat") {
-				return reject;
-			}
-			if (source === "queue") {
-				if (messageIsPing(msg)) {
-					// Pings must be rejected, so the next message may be queued
-					return reject;
-				} else {
-					// For all other messages, change the priority to wakeup
-					return requeue;
-				}
-			} else {
-				// The current outermost transaction must also be transferred,
-				// but only if it is not a ping or a handshake response,
-				// because that will block the send queue until wakeup
-				if (
-					messageIsPing(msg) ||
-					transaction.priority === MessagePriority.Handshake ||
-					// We don't want to immediately send the node to sleep when it wakes up,
-					// so drop these messages
-					(isCommandClassContainer(msg) &&
-						msg.command instanceof WakeUpCCNoMoreInformation)
-				) {
-					return reject;
-				} else {
-					return requeue;
-				}
-			}
+			// Drop all messages that are not allowed in the wakeup queue
+			// For all other messages, change the priority to wakeup
+			return this.mayMoveToWakeupQueue(transaction) ? requeue : reject;
 		};
 
 		// Apply the reducer to the send thread

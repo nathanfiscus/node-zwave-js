@@ -21,6 +21,8 @@ import { MessagePriority } from "../message/Constants";
 import {
 	ignoreTimeout,
 	PhysicalCCAPI,
+	PollValueImplementation,
+	POLL_VALUE,
 	SetValueImplementation,
 	SET_VALUE,
 	throwUnsupportedProperty,
@@ -168,6 +170,36 @@ export class DoorLockCCAPI extends PhysicalCCAPI {
 		}
 	};
 
+	protected [POLL_VALUE]: PollValueImplementation = async ({
+		property,
+	}): Promise<unknown> => {
+		switch (property) {
+			case "currentMode":
+			case "targetMode":
+			case "duration":
+			case "outsideHandlesCanOpenDoor":
+			case "insideHandlesCanOpenDoor":
+			case "latchStatus":
+			case "boltStatus":
+			case "doorStatus":
+			case "lockTimeout":
+				return (await this.get())?.[property];
+
+			case "operationType":
+			case "outsideHandlesCanOpenDoorConfiguration":
+			case "insideHandlesCanOpenDoorConfiguration":
+			case "lockTimeoutConfiguration":
+			case "autoRelockTime":
+			case "holdAndReleaseTime":
+			case "twistAssist":
+			case "blockToBlock":
+				return (await this.getConfiguration())?.[property];
+
+			default:
+				throwUnsupportedProperty(this.ccId, property);
+		}
+	};
+
 	// eslint-disable-next-line @typescript-eslint/explicit-module-boundary-types
 	public async getCapabilities() {
 		this.assertSupportsCommand(
@@ -197,6 +229,8 @@ export class DoorLockCCAPI extends PhysicalCCAPI {
 			"supportedOutsideHandles",
 		]);
 	}
+
+	private refreshTimeout: NodeJS.Timeout | undefined;
 
 	// eslint-disable-next-line @typescript-eslint/explicit-module-boundary-types
 	public async get() {
@@ -239,8 +273,16 @@ export class DoorLockCCAPI extends PhysicalCCAPI {
 		});
 		await this.driver.sendCommand(cc, this.commandOptions);
 
-		// Refresh the current value
-		await this.get();
+		// Refresh the current value after a delay
+		if (this.refreshTimeout) clearTimeout(this.refreshTimeout);
+		setTimeout(async () => {
+			this.refreshTimeout = undefined;
+			try {
+				await this.get();
+			} catch {
+				/* ignore */
+			}
+		}, this.driver.options.timeouts.refreshValue).unref();
 	}
 
 	public async setConfiguration(

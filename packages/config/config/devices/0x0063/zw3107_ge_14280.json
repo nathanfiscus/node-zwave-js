@@ -1,7 +1,7 @@
-// Jasco Products ZW3107 / GE 14280
+// GE/Jasco ZW3107 / GE 14280
 // Plug-In Smart Dimmer (Dual Linked Outlets)
 {
-	"manufacturer": "Jasco Products",
+	"manufacturer": "GE/Jasco",
 	"manufacturerId": "0x0063",
 	"label": "ZW3107 / GE 14280",
 	"description": "Plug-In Smart Dimmer (Dual Linked Outlets)",
@@ -77,7 +77,7 @@
 			"allowManualEntry": true
 		},
 		"10": {
-			"label": "Dim Timing  (When Manually Controlled)",
+			"label": "Dim Timing (When Manually Controlled)",
 			"description": "(When Manually Controlled)",
 			"valueSize": 1,
 			"minValue": 1,

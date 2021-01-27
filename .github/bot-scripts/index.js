@@ -1,9 +1,12 @@
 module.exports = {
-	fixLintOffer: (...args) => require("./fix-lint-offer")(...args),
-	fixLintCheck: (...args) => require("./fix-lint-check")(...args),
-	fixLintFeedback: (...args) => require("./fix-lint-feedback")(...args),
-	updateIndexOffer: (...args) => require("./update-index-offer")(...args),
-	updateIndexCheck: (...args) => require("./update-index-check")(...args),
-	updateIndexFeedback: (...args) =>
-		require("./update-index-feedback")(...args),
+	checkAuthorized: (...args) => require("./checkAuthorized")(...args),
+	fixLintFeedback: (...args) => require("./fixLintFeedback")(...args),
+	rebaseFeedback: (...args) => require("./rebaseFeedback")(...args),
+	renameCommitGetPRInfo: (...args) =>
+		require("./renameCommitGetPRInfo")(...args),
+	renameCommitCheck: (...args) => require("./renameCommitCheck")(...args),
+	renameCommitFeedback: (...args) =>
+		require("./renameCommitFeedback")(...args),
+	importConfigCreatePR: (...args) =>
+		require("./importConfigCreatePR")(...args),
 };

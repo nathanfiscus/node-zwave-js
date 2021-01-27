@@ -485,7 +485,7 @@
 			"allowManualEntry": false,
 			"options": [
 				{
-					"label": "Single Playback (Default)",
+					"label": "Single Playback",
 					"value": 0
 				},
 				{
@@ -619,7 +619,7 @@
 			]
 		},
 		"2[0x7f000000]": {
-			"label": "Light Effect  for EP 2 (Tampering)",
+			"label": "Light Effect for EP 2 (Tampering)",
 			"description": "Light Effect for EP 2 (Tampering)",
 			"valueSize": 4,
 			"minValue": 1,
@@ -714,7 +714,7 @@
 			"description": "Intercepting duration of a tone Endpoint 3(Doorbell 1)",
 			"valueSize": 4,
 			"minValue": 0,
-			"maxValue": 0,
+			"maxValue": 255,
 			"defaultValue": 0,
 			"readOnly": false,
 			"writeOnly": false,
@@ -1140,7 +1140,7 @@
 			"allowManualEntry": true,
 			"options": [
 				{
-					"label": "No interval.  (default)",
+					"label": "No interval. (default)",
 					"value": 0
 				},
 				{
